@@ -1,0 +1,37 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pmp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pmp_quiz
+      POSTGRES_USER: pmp_user
+      POSTGRES_PASSWORD: pmp_password
+    # Port hôte 5544 : 5432 (EnterpriseDB) et 5433 (Postgres.app) sont déjà pris par
+    # des PostgreSQL natifs sur cette machine. 5544 évite tout conflit.
+    ports:
+      - "5544:5432"
+    volumes:
+      - pmp_quiz_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmp_user -d pmp_quiz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    container_name: pmp-adminer
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pmp_quiz_postgres_data:

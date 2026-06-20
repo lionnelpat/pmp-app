@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Stack PRODUCTION pour Dokploy (Traefik + HTTPS gérés par Dokploy)
+#
+#  Déploiement Dokploy (type « Docker Compose ») :
+#    1. Pointer Dokploy sur ce dépôt + ce fichier (docker-compose.prod.yml).
+#    2. Onglet Environment : coller les variables de .env.example (secrets).
+#    3. Onglet Domains : domaine → service "frontend", port 80, HTTPS activé.
+#    4. Deploy.
+#
+#  Routage : Traefik (Dokploy) atteint le frontend via le réseau "dokploy-network".
+#  Aucun port n'est publié sur l'hôte. Postgres et Adminer restent internes.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-pmp_quiz}
+      POSTGRES_USER:     ${POSTGRES_USER:-pmp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}
+    volumes:
+      - pmp_quiz_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pmp_user} -d ${POSTGRES_DB:-pmp_quiz}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    # Interne uniquement : aucun port publié, aucun domaine.
+    # Accès via la console/terminal Dokploy ou un tunnel SSH si besoin.
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # Interne : joignable par le frontend (nginx) via http://backend:3001
+    environment:
+      NODE_ENV:       production
+      PORT:           3001
+      DATABASE_URL:   postgresql://${POSTGRES_USER:-pmp_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pmp_quiz}
+      JWT_SECRET:     ${JWT_SECRET:?JWT_SECRET requis}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD requis}
+      ADMIN_EMAIL:    ${ADMIN_EMAIL:-admin@pmp.local}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    # Pas de "ports" : c'est Traefik (Dokploy) qui route vers ce service.
+    # Dans l'UI Dokploy → Domains : service "frontend", port 80.
+    expose:
+      - "80"
+    depends_on:
+      - backend
+    networks:
+      - default          # réseau interne de l'app (frontend ↔ backend ↔ postgres)
+      - dokploy-network   # réseau partagé de Traefik → ingress public
+
+networks:
+  # Réseau créé par Dokploy ; Traefik y est rattaché.
+  dokploy-network:
+    external: true
+
+volumes:
+  pmp_quiz_postgres_data:
