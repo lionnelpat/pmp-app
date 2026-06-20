@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
-const path    = require('path');
 const { connect, initSchema } = require('./db');
 const { ensureAdmin, ensureExams } = require('./lib/bootstrap');
 
@@ -19,12 +18,9 @@ app.use('/api/admin',    require('./routes/admin'));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
-// Serve frontend in production
-if (process.env.NODE_ENV === 'production') {
-  const build = path.join(__dirname, '..', 'frontend', 'build');
-  app.use(express.static(build));
-  app.get('*', (req, res) => res.sendFile(path.join(build, 'index.html')));
-}
+// API-only : le frontend est servi par son propre conteneur nginx.
+// Toute route inconnue renvoie un 404 JSON (pas de fichiers statiques ici).
+app.use((req, res) => res.status(404).json({ error: 'Route introuvable' }));
 
 async function start() {
   try {
