@@ -37,7 +37,7 @@ c'est Traefik qui l'atteint via `dokploy-network`.
 2. **Provider** : connecter le dépôt Git + la branche.
 3. **Compose Path** : `docker-compose.prod.yml`.
 
-## 3. Renseigner les secrets
+## 3. Renseigner les secrets et les domaines
 
 Onglet **Environment** → coller le contenu de [`.env.example`](.env.example) et
 remplir les valeurs :
@@ -48,22 +48,27 @@ remplir les valeurs :
 | `JWT_SECRET`        | `openssl rand -hex 32`                              |
 | `ADMIN_PASSWORD`    | mot de passe admin (login `admin` par défaut)       |
 | `ADMIN_EMAIL`       | ton email                                           |
+| `APP_DOMAIN`        | `pmp.model-technologie.com`                         |
+| `ADMINER_DOMAIN`    | `pmp-adminer.model-technologie.com`                 |
 
 `POSTGRES_DB`, `POSTGRES_USER`, `ADMIN_USERNAME`, `JWT_EXPIRES_IN` ont des
 valeurs par défaut — ne les surcharger que si nécessaire.
 
-## 4. Déclarer le domaine
+## 4. Domaines & DNS — par les labels, PAS par l'UI
 
-Onglet **Domains** → **Add Domain** :
+⚠️ En type **Compose**, le routage Traefik se fait **uniquement par les labels**
+du `docker-compose.prod.yml` (déjà en place). **Ne configure AUCUN domaine dans
+l'onglet « Domains »** de Dokploy : ça ne s'applique pas au Compose et crée des
+conflits. Si tu en avais ajouté, **supprime-les**.
 
-| Champ    | Valeur                       |
-|----------|------------------------------|
-| Host     | `quiz.ton-domaine.com`       |
-| Service  | `frontend`                   |
-| Port     | `80`                         |
-| HTTPS    | activé (Let's Encrypt)       |
+Côté **DNS**, crée deux enregistrements **A** → IP du VPS :
 
-> Prérequis DNS : un enregistrement **A** `quiz.ton-domaine.com` → IP du VPS.
+| Hôte                                  | Type | Cible       |
+|---------------------------------------|------|-------------|
+| `pmp.model-technologie.com`           | A    | IP du VPS   |
+| `pmp-adminer.model-technologie.com`   | A    | IP du VPS   |
+
+Traefik émet les certificats Let's Encrypt automatiquement au 1er accès HTTPS.
 
 ## 5. Déployer
 

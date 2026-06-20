@@ -1,14 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
 #  Stack PRODUCTION pour Dokploy (Traefik + HTTPS gérés par Dokploy)
 #
-#  Déploiement Dokploy (type « Docker Compose ») :
-#    1. Pointer Dokploy sur ce dépôt + ce fichier (docker-compose.prod.yml).
-#    2. Onglet Environment : coller les variables de .env.example (secrets).
-#    3. Onglet Domains : domaine → service "frontend", port 80, HTTPS activé.
-#    4. Deploy.
+#  ⚠️  Type « Docker Compose » dans Dokploy : le routage Traefik se fait par les
+#      LABELS ci-dessous, PAS par l'onglet « Domains » de l'UI (réservé au type
+#      « Application »). Ne configure donc AUCUN domaine dans l'UI pour éviter
+#      les conflits — tout est ici.
 #
-#  Routage : Traefik (Dokploy) atteint le frontend via le réseau "dokploy-network".
-#  Aucun port n'est publié sur l'hôte. Postgres et Adminer restent internes.
+#  Déploiement :
+#    1. Dokploy → Create Compose → dépôt Git → Compose Path: docker-compose.prod.yml
+#    2. Onglet Environment : coller .env.example (secrets + APP_DOMAIN/ADMINER_DOMAIN)
+#    3. DNS : A record  pmp.model-technologie.com  →  IP du VPS  (idem adminer)
+#    4. Deploy
+#
+#  Postgres et Backend restent internes. Le frontend (nginx) sert React et
+#  proxifie /api vers le backend. Adminer est exposé sur son propre sous-domaine.
 # ─────────────────────────────────────────────────────────────────────────────
 services:
 
@@ -26,18 +31,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  adminer:
-    image: adminer:latest
-    restart: unless-stopped
-    # Interne uniquement : aucun port publié, aucun domaine.
-    # Accès via la console/terminal Dokploy ou un tunnel SSH si besoin.
-    environment:
-      ADMINER_DEFAULT_SERVER: postgres
-      ADMINER_DESIGN: pepa-linha
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   backend:
     build: ./backend
@@ -59,15 +52,49 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
-    # Pas de "ports" : c'est Traefik (Dokploy) qui route vers ce service.
-    # Dans l'UI Dokploy → Domains : service "frontend", port 80.
     expose:
       - "80"
     depends_on:
       - backend
     networks:
-      - default          # réseau interne de l'app (frontend ↔ backend ↔ postgres)
-      - dokploy-network   # réseau partagé de Traefik → ingress public
+      - default          # frontend ↔ backend ↔ postgres (interne)
+      - dokploy-network   # ingress Traefik (public)
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      # Routeur HTTPS
+      - traefik.http.routers.pmp-frontend.rule=Host(`${APP_DOMAIN:-pmp.model-technologie.com}`)
+      - traefik.http.routers.pmp-frontend.entrypoints=websecure
+      - traefik.http.routers.pmp-frontend.tls.certresolver=letsencrypt
+      - traefik.http.services.pmp-frontend.loadbalancer.server.port=80
+      # Routeur HTTP → redirection vers HTTPS
+      - traefik.http.routers.pmp-frontend-web.rule=Host(`${APP_DOMAIN:-pmp.model-technologie.com}`)
+      - traefik.http.routers.pmp-frontend-web.entrypoints=web
+      - traefik.http.routers.pmp-frontend-web.middlewares=pmp-redirect-https
+      - traefik.http.middlewares.pmp-redirect-https.redirectscheme.scheme=https
+
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default          # adminer ↔ postgres
+      - dokploy-network   # ingress Traefik (public)
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.pmp-adminer.rule=Host(`${ADMINER_DOMAIN:-pmp-adminer.model-technologie.com}`)
+      - traefik.http.routers.pmp-adminer.entrypoints=websecure
+      - traefik.http.routers.pmp-adminer.tls.certresolver=letsencrypt
+      - traefik.http.services.pmp-adminer.loadbalancer.server.port=8080
+      - traefik.http.routers.pmp-adminer-web.rule=Host(`${ADMINER_DOMAIN:-pmp-adminer.model-technologie.com}`)
+      - traefik.http.routers.pmp-adminer-web.entrypoints=web
+      - traefik.http.routers.pmp-adminer-web.middlewares=pmp-redirect-https
 
 networks:
   # Réseau créé par Dokploy ; Traefik y est rattaché.
