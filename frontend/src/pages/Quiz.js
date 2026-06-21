@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import { Spinner, Badge, GradeBadge, ScoreDial, Toggle, ProgressBar } from '../components/UI';
@@ -19,6 +19,10 @@ function fmtTimer(s) {
   const pad = n => String(n).padStart(2, '0');
   return h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
+
+// Pauses pendant l'examen (≈ format PMP : une pause à chaque tiers).
+const BREAK_SECONDS = 300;          // durée d'une pause : 5 min
+const MIN_TOTAL_FOR_BREAKS = 60;    // pas de pause en dessous de ce nombre de questions
 
 // Une question est-elle considérée comme répondue ?
 function isAnswered(q, a) {
@@ -215,6 +219,14 @@ export function QuizPage({ attemptId, questions, candidateName, timeLimitSeconds
   const [remaining, setRemaining] = useState(null); // secondes restantes (null = pas de minuteur)
   const [timeUp,   setTimeUp] = useState(false);
 
+  // ── Pauses aux tiers de l'examen ──
+  const [onBreak,      setOnBreak]      = useState(false);
+  const [breakSecLeft, setBreakSecLeft] = useState(BREAK_SECONDS);
+  const onBreakRef     = useRef(false);     // miroir de onBreak pour le tick minuteur
+  const breakStartRef  = useRef(0);         // horodatage du début de la pause
+  const breakOffsetRef = useRef(0);         // ms de pause cumulés (étendent l'échéance)
+  const breaksTakenRef = useRef(new Set()); // frontières déjà déclenchées
+
   const submittedRef = useRef(false);
   const answersRef   = useRef(answers);
   useEffect(() => { answersRef.current = answers; }, [answers]);
@@ -222,6 +234,13 @@ export function QuizPage({ attemptId, questions, candidateName, timeLimitSeconds
   const cur = questions[idx];
   const total = questions.length;
   const answered = questions.filter(q => isAnswered(q, answers[q.id])).length;
+
+  // Frontières de pause : aux tiers (1/3 et 2/3) pour les examens assez longs.
+  // Ex. 180 questions → pauses après la Q60 et la Q120.
+  const breakBoundaries = useMemo(
+    () => (total >= MIN_TOTAL_FOR_BREAKS ? [Math.floor(total / 3), Math.floor(total / 3) * 2] : []),
+    [total]
+  );
 
   // single : sélection unique
   function pick(letter) {
@@ -264,10 +283,14 @@ export function QuizPage({ attemptId, questions, candidateName, timeLimitSeconds
   }, [questions, attemptId, onFinish]);
 
   // Minuteur : décompte chaque seconde, auto-soumission à 0.
+  // Gelé pendant une pause ; le temps de pause étend l'échéance (il ne compte
+  // pas dans le temps d'examen).
   useEffect(() => {
     if (!timeLimitSeconds || !startedAt) return;
-    const deadline = new Date(startedAt).getTime() + timeLimitSeconds * 1000;
+    const startMs = new Date(startedAt).getTime();
     const tick = () => {
+      if (onBreakRef.current) return;               // gelé pendant la pause
+      const deadline = startMs + timeLimitSeconds * 1000 + breakOffsetRef.current;
       const rem = Math.max(0, Math.round((deadline - Date.now()) / 1000));
       setRemaining(rem);
       if (rem <= 0) { setTimeUp(true); doSubmit(); }
@@ -277,6 +300,36 @@ export function QuizPage({ attemptId, questions, candidateName, timeLimitSeconds
     return () => clearInterval(iv);
   }, [timeLimitSeconds, startedAt, doSubmit]);
 
+  // Termine la pause : cumule sa durée réelle dans l'offset et reprend l'examen.
+  const endBreak = useCallback(() => {
+    breakOffsetRef.current += Date.now() - breakStartRef.current;
+    onBreakRef.current = false;
+    setOnBreak(false);
+  }, []);
+
+  // Déclenche une pause au franchissement d'un tiers (une seule fois par frontière).
+  useEffect(() => {
+    if (onBreakRef.current || breakBoundaries.length === 0) return;
+    const reached = breakBoundaries.filter(b => idx >= b && !breaksTakenRef.current.has(b));
+    if (reached.length === 0) return;
+    reached.forEach(b => breaksTakenRef.current.add(b));
+    breakStartRef.current = Date.now();
+    setBreakSecLeft(BREAK_SECONDS);
+    onBreakRef.current = true;
+    setOnBreak(true);
+  }, [idx, breakBoundaries]);
+
+  // Décompte de la pause ; reprise automatique à 0.
+  useEffect(() => {
+    if (!onBreak) return;
+    const iv = setInterval(() => {
+      const left = Math.max(0, BREAK_SECONDS - Math.round((Date.now() - breakStartRef.current) / 1000));
+      setBreakSecLeft(left);
+      if (left <= 0) endBreak();
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [onBreak, endBreak]);
+
   if (!cur) return null;
 
   const lowTime = remaining !== null && remaining <= 300;   // < 5 min
@@ -285,6 +338,28 @@ export function QuizPage({ attemptId, questions, candidateName, timeLimitSeconds
 
   return (
     <div style={{ maxWidth: 760, margin: '0 auto', padding: '16px 16px 48px' }}>
+      {/* Pause (aux tiers de l'examen) */}
+      {onBreak && (
+        <div className="modal-overlay" style={{ zIndex: 60 }}>
+          <div className="modal" style={{ textAlign: 'center', maxWidth: 420 }}>
+            <div style={{ fontSize: 42, marginBottom: 8 }}>☕</div>
+            <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Pause</h3>
+            <p className="text-muted" style={{ fontSize: 14, marginBottom: 18 }}>
+              Vous avez terminé une section. Faites une pause — <strong>le temps d'examen est gelé</strong>.
+            </p>
+            <div style={{ fontSize: 46, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: '#0f172a', lineHeight: 1 }}>
+              {fmtTimer(breakSecLeft)}
+            </div>
+            <div className="text-muted text-small" style={{ margin: '8px 0 20px' }}>
+              Reprise automatique à la fin de la pause · question {idx + 1}/{total}
+            </div>
+            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={endBreak}>
+              <i className="ti ti-player-play" aria-hidden="true" /> Reprendre maintenant
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top bar */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, padding: '8px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8 }}>
         <span style={{ fontWeight: 600, fontSize: 13 }}>{candidateName}</span>
