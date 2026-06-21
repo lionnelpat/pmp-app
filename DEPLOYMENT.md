@@ -93,6 +93,11 @@ Vérifier dans les **logs** du service `backend` :
 Via le **terminal** du conteneur (UI Dokploy) ou `docker compose exec` sur le VPS :
 
 ```bash
+# Réinitialiser le mot de passe admin depuis ADMIN_PASSWORD (non destructif).
+# À lancer si "Identifiants incorrects" alors que le mot de passe semble bon :
+# l'admin existant en base n'est jamais écrasé par ensureAdmin().
+npm run reset-admin                # depuis le terminal du conteneur backend
+
 # Réinitialiser COMPLÈTEMENT le contenu des quiz (destructif, garde les users)
 npm run seed                       # depuis le conteneur backend
 
